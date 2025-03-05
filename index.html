@@ -68,86 +68,192 @@
 
         // Create buildings
         const buildings = [];
-        function createBuilding(x, z, width, height, depth) {
+        function createBuilding(x, z, width, height, depth, isInterior = false) {
             const buildingGroup = new THREE.Group();
             
             // Main building structure
             const buildingGeometry = new THREE.BoxGeometry(width, height, depth);
             const buildingMaterial = new THREE.MeshStandardMaterial({ 
-                color: Math.random() > 0.5 ? 0x808080 : 0xa0a0a0 // Random grey variation
+                color: Math.random() > 0.5 ? 0x808080 : 0xa0a0a0, // Random grey variation
+                side: isInterior ? THREE.BackSide : THREE.FrontSide // BackSide for interior walls
             });
             const building = new THREE.Mesh(buildingGeometry, buildingMaterial);
             buildingGroup.add(building);
             
-            // Add windows
-            const windowMaterial = new THREE.MeshStandardMaterial({ 
-                color: 0x3399ff,
-                emissive: 0x3399ff,
-                emissiveIntensity: 0.2
-            });
-            
-            const windowSize = 0.4;
-            const windowDepth = 0.1;
-            const windowSpacing = 1.2;
-            
-            // Calculate number of windows based on building size
-            const numWindowsHorizontal = Math.floor(width / windowSpacing);
-            const numWindowsVertical = Math.floor(height / windowSpacing);
-            
-            // Create windows for front and back
-            [-depth/2, depth/2].forEach(zPos => {
-                for (let wx = 0; wx < numWindowsHorizontal; wx++) {
-                    for (let wy = 0; wy < numWindowsVertical; wy++) {
-                        const windowGeometry = new THREE.BoxGeometry(windowSize, windowSize, windowDepth);
-                        const windowMesh = new THREE.Mesh(windowGeometry, windowMaterial);
-                        
-                        // Position windows
-                        windowMesh.position.x = (wx * windowSpacing) - (width/2 - windowSpacing/2);
-                        windowMesh.position.y = (wy * windowSpacing) - (height/2 - windowSpacing/2);
-                        windowMesh.position.z = zPos;
-                        
-                        buildingGroup.add(windowMesh);
+            // Add windows (only for exterior buildings)
+            if (!isInterior) {
+                const windowMaterial = new THREE.MeshStandardMaterial({ 
+                    color: 0x3399ff,
+                    emissive: 0x3399ff,
+                    emissiveIntensity: 0.2
+                });
+                
+                const windowSize = 0.4;
+                const windowDepth = 0.1;
+                const windowSpacing = 1.2;
+                
+                // Calculate number of windows based on building size
+                const numWindowsHorizontal = Math.floor(width / windowSpacing);
+                const numWindowsVertical = Math.floor(height / windowSpacing);
+                
+                // Create windows for front and back
+                [-depth/2, depth/2].forEach(zPos => {
+                    for (let wx = 0; wx < numWindowsHorizontal; wx++) {
+                        for (let wy = 0; wy < numWindowsVertical; wy++) {
+                            const windowGeometry = new THREE.BoxGeometry(windowSize, windowSize, windowDepth);
+                            const windowMesh = new THREE.Mesh(windowGeometry, windowMaterial);
+                            
+                            // Position windows
+                            windowMesh.position.x = (wx * windowSpacing) - (width/2 - windowSpacing/2);
+                            windowMesh.position.y = (wy * windowSpacing) - (height/2 - windowSpacing/2);
+                            windowMesh.position.z = zPos;
+                            
+                            buildingGroup.add(windowMesh);
+                        }
                     }
-                }
-            });
-            
-            // Create windows for sides
-            [-width/2, width/2].forEach(xPos => {
-                for (let wz = 0; wz < Math.floor(depth / windowSpacing); wz++) {
-                    for (let wy = 0; wy < numWindowsVertical; wy++) {
-                        const windowGeometry = new THREE.BoxGeometry(windowDepth, windowSize, windowSize);
-                        const windowMesh = new THREE.Mesh(windowGeometry, windowMaterial);
-                        
-                        windowMesh.position.x = xPos;
-                        windowMesh.position.y = (wy * windowSpacing) - (height/2 - windowSpacing/2);
-                        windowMesh.position.z = (wz * windowSpacing) - (depth/2 - windowSpacing/2);
-                        
-                        buildingGroup.add(windowMesh);
+                });
+                
+                // Create windows for sides
+                [-width/2, width/2].forEach(xPos => {
+                    for (let wz = 0; wz < Math.floor(depth / windowSpacing); wz++) {
+                        for (let wy = 0; wy < numWindowsVertical; wy++) {
+                            const windowGeometry = new THREE.BoxGeometry(windowDepth, windowSize, windowSize);
+                            const windowMesh = new THREE.Mesh(windowGeometry, windowMaterial);
+                            
+                            windowMesh.position.x = xPos;
+                            windowMesh.position.y = (wy * windowSpacing) - (height/2 - windowSpacing/2);
+                            windowMesh.position.z = (wz * windowSpacing) - (depth/2 - windowSpacing/2);
+                            
+                            buildingGroup.add(windowMesh);
+                        }
                     }
-                }
-            });
+                });
+            }
             
             buildingGroup.position.set(x, height/2, z);
             scene.add(buildingGroup);
             buildings.push(buildingGroup);
         }
 
-        // Add more buildings
-        for (let i = 0; i < 30; i++) { // Create 30 random buildings
-            const x = Math.random() * 200 - 100; // -100 to 100
-            const z = Math.random() * 200 - 100; // -100 to 100
-            const width = Math.random() * 8 + 4; // 4-12 width
-            const height = Math.random() * 20 + 10; // 10-30 height
-            const depth = Math.random() * 8 + 4; // 4-12 depth
+        // Create large building with interior
+        function createLargeBuilding() {
+            const width = 30;
+            const height = 40;
+            const depth = 30;
+            const wallThickness = 1;
+            
+            // Create outer shell
+            const buildingGroup = new THREE.Group();
+            const buildingMaterial = new THREE.MeshStandardMaterial({ 
+                color: 0x808080,
+                side: THREE.FrontSide
+            });
+
+            // Create walls separately to leave space for door
+            // Back wall
+            const backWall = new THREE.Mesh(
+                new THREE.BoxGeometry(width, height, wallThickness),
+                buildingMaterial
+            );
+            backWall.position.set(0, height/2, -depth/2);
+            buildingGroup.add(backWall);
+
+            // Left wall
+            const leftWall = new THREE.Mesh(
+                new THREE.BoxGeometry(wallThickness, height, depth),
+                buildingMaterial
+            );
+            leftWall.position.set(-width/2, height/2, 0);
+            buildingGroup.add(leftWall);
+
+            // Right wall
+            const rightWall = new THREE.Mesh(
+                new THREE.BoxGeometry(wallThickness, height, depth),
+                buildingMaterial
+            );
+            rightWall.position.set(width/2, height/2, 0);
+            buildingGroup.add(rightWall);
+
+            // Front walls (with door gap)
+            const doorWidth = 8; // Increased from 4 to 8
+            const doorHeight = 8; // Increased from 6 to 8
+
+            // Front left wall
+            const frontLeftWall = new THREE.Mesh(
+                new THREE.BoxGeometry((width - doorWidth)/2, height, wallThickness),
+                buildingMaterial
+            );
+            frontLeftWall.position.set(-width/4 - doorWidth/4, height/2, depth/2);
+            buildingGroup.add(frontLeftWall);
+
+            // Front right wall
+            const frontRightWall = new THREE.Mesh(
+                new THREE.BoxGeometry((width - doorWidth)/2, height, wallThickness),
+                buildingMaterial
+            );
+            frontRightWall.position.set(width/4 + doorWidth/4, height/2, depth/2);
+            buildingGroup.add(frontRightWall);
+
+            // Front top wall
+            const frontTopWall = new THREE.Mesh(
+                new THREE.BoxGeometry(width, height - doorHeight, wallThickness),
+                buildingMaterial
+            );
+            frontTopWall.position.set(0, height - (height - doorHeight)/2, depth/2);
+            buildingGroup.add(frontTopWall);
+
+            // Roof
+            const roof = new THREE.Mesh(
+                new THREE.BoxGeometry(width, wallThickness, depth),
+                buildingMaterial
+            );
+            roof.position.set(0, height, 0);
+            buildingGroup.add(roof);
+
+            // Add interior walls
+            const interiorMaterial = new THREE.MeshStandardMaterial({
+                color: 0xa0a0a0,
+                side: THREE.BackSide
+            });
+            const interior = new THREE.Mesh(
+                new THREE.BoxGeometry(
+                    width - wallThickness * 2,
+                    height - wallThickness * 2,
+                    depth - wallThickness * 2
+                ),
+                interiorMaterial
+            );
+            interior.position.set(0, height/2, 0);
+            buildingGroup.add(interior);
+
+            // Add building to scene and buildings array
+            scene.add(buildingGroup);
+            buildings.push(buildingGroup);
+        }
+
+        // Add the large building before creating random buildings
+        createLargeBuilding();
+
+        // Add more buildings (adjust positions to avoid overlap)
+        for (let i = 0; i < 30; i++) {
+            const x = Math.random() * 200 - 100;
+            const z = Math.random() * 200 - 100;
+            
+            // Don't place buildings too close to the large building
+            if (Math.abs(x) < 40 && Math.abs(z) < 40) continue;
+            
+            const width = Math.random() * 8 + 4;
+            const height = Math.random() * 20 + 10;
+            const depth = Math.random() * 8 + 4;
             createBuilding(x, z, width, height, depth);
         }
 
         // Player movement setup
-        const moveSpeed = 0.2; // Increased for more responsive movement
-        const rotationSpeed = 0.04; // Increased for more responsive turning
+        const moveSpeed = 0.5;
+        const rotationSpeed = 0.1;
         const bulletSpeed = 1.0;
-        const bullets = []; // Array to store active bullets
-        camera.position.set(0, 1.7, 10);
+        const bullets = [];
+        camera.position.set(0, 1.7, 40);
         
         // Movement state
         const keyState = {};
@@ -305,17 +411,26 @@
             createDinosaur(i);
         }
 
-        // Check collision between dinosaur and buildings
-        function checkDinoCollision(dinoPosition) {
+        // Modify collision check to be more forgiving
+        function checkDinoCollision(position) {
+            // Create a smaller collision box for the player/dino
+            const collisionBox = new THREE.Box3();
+            collisionBox.setFromCenterAndSize(
+                position,
+                new THREE.Vector3(1, 2, 1) // Much smaller collision box
+            );
+            
             for (const building of buildings) {
                 const buildingBox = new THREE.Box3().setFromObject(building);
-                const dinoBox = new THREE.Box3();
-                dinoBox.setFromCenterAndSize(
-                    dinoPosition,
-                    new THREE.Vector3(4, 4, 6) // Dinosaur collision box
-                );
                 
-                if (dinoBox.intersectsBox(buildingBox)) {
+                // Check if we're near the door of the large building
+                if (Math.abs(position.x) < 4 && // Half of door width
+                    position.z > 14 && position.z < 16 && // Near the front wall
+                    position.y < 8) { // Below door height
+                    continue; // Skip collision check for the doorway
+                }
+                
+                if (collisionBox.intersectsBox(buildingBox)) {
                     return true;
                 }
             }
