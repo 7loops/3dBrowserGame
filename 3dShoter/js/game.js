@@ -38,12 +38,62 @@ class Game {
         this.waveDelay = 5000; // 5 seconds between waves
         this.lastWaveTime = 0;
         this.isWaveInProgress = false;
+        this.isBossWave = false;
 
         // Add score properties
         this.score = 0;
         this.highScore = localStorage.getItem('highScore') || 0;
         this.pointsPerKill = 100;
         this.waveBonus = 500;
+
+        // Add particle system for blood effects
+        this.bloodParticles = [];
+        this.bloodDecals = [];
+        
+        // Move audio initialization to after user interaction
+        this.audioListener = null;
+        this.zombieSounds = [];
+        this.hitSounds = [];
+        this.currentHitSound = 0;
+
+        // Add weapon properties
+        this.weapons = {
+            pistol: {
+                name: 'Pistol',
+                damage: 34,
+                cooldown: 250,
+                bulletSpeed: 100,
+                bulletSize: 0.05,
+                bulletColor: 0xffff00,
+                model: null,
+                ammo: Infinity
+            },
+            shotgun: {
+                name: 'Shotgun',
+                damage: 20,
+                cooldown: 800,
+                bulletSpeed: 80,
+                bulletSize: 0.03,
+                bulletColor: 0xff4400,
+                pellets: 8,
+                spread: 0.2,
+                model: null,
+                ammo: 30
+            },
+            machineGun: {
+                name: 'Machine Gun',
+                damage: 15,
+                cooldown: 100,
+                bulletSpeed: 120,
+                bulletSize: 0.04,
+                bulletColor: 0x00ffff,
+                model: null,
+                ammo: 100
+            }
+        };
+        
+        this.currentWeapon = 'pistol';
+        this.weaponDisplay = null;
 
         this.init();
     }
@@ -96,6 +146,7 @@ class Game {
 
         this.controls.addEventListener('lock', () => {
             blocker.style.display = 'none';
+            this.initAudio(); // Initialize audio after user interaction
         });
 
         this.controls.addEventListener('unlock', () => {
@@ -164,8 +215,9 @@ class Game {
         document.addEventListener('keyup', (event) => this.onKeyUp(event));
         window.addEventListener('resize', () => this.onWindowResize());
 
-        // Add gun and crosshair
-        this.createGun();
+        // Add weapon models
+        this.createWeaponModels();
+        this.createWeaponDisplay();
         this.createCrosshair();
 
         // Add shooting event listeners
@@ -194,12 +246,39 @@ class Game {
             }
         });
 
+        // Add weapon switching keys
+        document.addEventListener('keydown', (event) => {
+            switch(event.code) {
+                case 'Digit1':
+                    this.switchWeapon('pistol');
+                    break;
+                case 'Digit2':
+                    if (this.weapons.shotgun.ammo > 0) {
+                        this.switchWeapon('shotgun');
+                    }
+                    break;
+                case 'Digit3':
+                    if (this.weapons.machineGun.ammo > 0) {
+                        this.switchWeapon('machineGun');
+                    }
+                    break;
+            }
+        });
+
         this.createHealthDisplay();
         this.createWaveDisplay();
         this.createScoreDisplay();
 
         // Start animation loop
         this.animate();
+    }
+
+    initAudio() {
+        if (!this.audioListener) {
+            this.audioListener = new THREE.AudioListener();
+            this.camera.add(this.audioListener);
+            this.loadSoundEffects();
+        }
     }
 
     onKeyDown(event) {
@@ -276,79 +355,60 @@ class Game {
         this.prevTime = time;
     }
 
-    createGun() {
-        // Simple gun model
-        const gunGroup = new THREE.Group();
-        
-        // Gun barrel
-        const barrelGeometry = new THREE.BoxGeometry(0.1, 0.1, 1);
-        const barrelMaterial = new THREE.MeshStandardMaterial({ color: 0x444444 });
-        const barrel = new THREE.Mesh(barrelGeometry, barrelMaterial);
-        barrel.position.z = -0.5;
-        
-        // Gun handle
-        const handleGeometry = new THREE.BoxGeometry(0.1, 0.3, 0.1);
-        const handle = new THREE.Mesh(handleGeometry, barrelMaterial);
-        handle.position.y = -0.2;
-        
-        gunGroup.add(barrel);
-        gunGroup.add(handle);
-        
-        // Position the gun in view
-        gunGroup.position.set(0.3, -0.3, -0.5);
-        this.camera.add(gunGroup);
-        this.gun = gunGroup;
-    }
-
-    createCrosshair() {
-        const crosshair = document.createElement('div');
-        crosshair.style.position = 'absolute';
-        crosshair.style.top = '50%';
-        crosshair.style.left = '50%';
-        crosshair.style.width = '20px';
-        crosshair.style.height = '20px';
-        crosshair.style.backgroundColor = 'transparent';
-        crosshair.style.border = '2px solid white';
-        crosshair.style.borderRadius = '50%';
-        crosshair.style.transform = 'translate(-50%, -50%)';
-        crosshair.style.pointerEvents = 'none';
-        document.body.appendChild(crosshair);
-        this.crosshair = crosshair;
-    }
-
     shoot() {
+        const weapon = this.weapons[this.currentWeapon];
         const now = performance.now();
-        if (now - this.lastShot < this.shootingCooldown) return;
+        if (now - this.lastShot < weapon.cooldown || 
+            (weapon.ammo !== Infinity && weapon.ammo <= 0)) return;
         
         this.lastShot = now;
         
-        // Create bullet
-        const bulletGeometry = new THREE.SphereGeometry(0.05);
-        const bulletMaterial = new THREE.MeshBasicMaterial({ color: 0xffff00 });
+        if (weapon.ammo !== Infinity) {
+            weapon.ammo--;
+            this.updateWeaponDisplay();
+        }
+        
+        if (this.currentWeapon === 'shotgun') {
+            // Shotgun spread
+            for (let i = 0; i < weapon.pellets; i++) {
+                this.createBullet(weapon, true);
+            }
+        } else {
+            this.createBullet(weapon, false);
+        }
+        
+        // Gun recoil animation
+        weapon.model.position.z += 0.1;
+        setTimeout(() => {
+            weapon.model.position.z -= 0.1;
+        }, 50);
+    }
+
+    createBullet(weapon, spread = false) {
+        const bulletGeometry = new THREE.SphereGeometry(weapon.bulletSize);
+        const bulletMaterial = new THREE.MeshBasicMaterial({ color: weapon.bulletColor });
         const bullet = new THREE.Mesh(bulletGeometry, bulletMaterial);
         
-        // Position bullet at gun tip
         bullet.position.copy(this.camera.position);
         
-        // Get shooting direction from camera
         const direction = new THREE.Vector3();
         this.camera.getWorldDirection(direction);
         
-        // Store bullet data
+        if (spread) {
+            direction.x += (Math.random() - 0.5) * weapon.spread;
+            direction.y += (Math.random() - 0.5) * weapon.spread;
+            direction.z += (Math.random() - 0.5) * weapon.spread;
+            direction.normalize();
+        }
+        
         this.bullets.push({
             mesh: bullet,
-            velocity: direction.multiplyScalar(this.bulletSpeed),
-            created: now
+            velocity: direction.multiplyScalar(weapon.bulletSpeed),
+            created: performance.now(),
+            damage: weapon.damage
         });
         
-        // Add to scene
         this.scene.add(bullet);
-        
-        // Gun recoil animation
-        this.gun.position.z += 0.1;
-        setTimeout(() => {
-            this.gun.position.z -= 0.1;
-        }, 50);
     }
 
     updateBullets(delta) {
@@ -387,18 +447,123 @@ class Game {
         }
     }
 
-    createZombie() {
+    loadSoundEffects() {
+        try {
+            const audioLoader = new THREE.AudioLoader();
+            
+            // Load zombie groans with error handling
+            this.zombieSoundBuffers = []; // Store the audio buffers
+            Promise.all(['groan1.wav', 'groan2.wav', 'groan3.wav'].map(name => {
+                return new Promise((resolve, reject) => {
+                    audioLoader.load(`sounds/${name}`, 
+                        buffer => {
+                            this.zombieSoundBuffers.push(buffer);
+                            resolve();
+                        },
+                        undefined,
+                        error => {
+                            console.warn('Could not load sound:', name, error);
+                            reject(error);
+                        }
+                    );
+                });
+            })).catch(error => {
+                console.warn('Failed to load some zombie sounds:', error);
+            });
+            
+            // Create multiple hit sounds for overlapping hits
+            this.hitSounds = Array(3).fill(null).map(() => {
+                const sound = new THREE.Audio(this.audioListener);
+                return sound;
+            });
+            
+            // Load hit sound
+            audioLoader.load('sounds/hit.wav',
+                buffer => {
+                    this.hitSounds.forEach(sound => {
+                        sound.setBuffer(buffer);
+                        sound.setVolume(0.5);
+                    });
+                },
+                undefined,
+                error => {
+                    console.warn('Could not load hit sound:', error);
+                }
+            );
+        } catch (error) {
+            console.warn('Audio system initialization failed:', error);
+            this.zombieSoundBuffers = [];
+            this.hitSounds = [];
+        }
+    }
+
+    createBloodParticles(position) {
+        const particleCount = 30;
+        const particles = new THREE.Group();
+        
+        for (let i = 0; i < particleCount; i++) {
+            const particle = new THREE.Mesh(
+                new THREE.SphereGeometry(0.05),
+                new THREE.MeshBasicMaterial({ color: 0x8b0000 })
+            );
+            
+            particle.position.copy(position);
+            particle.velocity = new THREE.Vector3(
+                (Math.random() - 0.5) * 5,
+                Math.random() * 5,
+                (Math.random() - 0.5) * 5
+            );
+            particle.lifetime = 1 + Math.random();
+            particle.age = 0;
+            
+            particles.add(particle);
+        }
+        
+        this.scene.add(particles);
+        this.bloodParticles.push({
+            group: particles,
+            particles: particles.children
+        });
+    }
+
+    createBloodDecal(position) {
+        const decalGeometry = new THREE.CircleGeometry(0.5 + Math.random() * 0.5);
+        const decalMaterial = new THREE.MeshBasicMaterial({
+            color: 0x8b0000,
+            transparent: true,
+            opacity: 0.8,
+            depthWrite: false
+        });
+        
+        const decal = new THREE.Mesh(decalGeometry, decalMaterial);
+        decal.rotation.x = -Math.PI / 2;
+        decal.position.copy(position);
+        decal.position.y = 0.01; // Slightly above ground
+        
+        this.scene.add(decal);
+        this.bloodDecals.push({
+            mesh: decal,
+            age: 0,
+            lifetime: 30 // Seconds before fading
+        });
+    }
+
+    createEnhancedZombie() {
         const zombieGroup = new THREE.Group();
         
-        // Create materials with better colors
+        // Enhanced materials with better colors and properties
         const skinMaterial = new THREE.MeshStandardMaterial({ 
-            color: 0x55aa55,  // Sickly green
-            roughness: 0.7,
-            metalness: 0.3
+            color: 0x2d5e1e,  // Darker green
+            roughness: 0.9,
+            metalness: 0.1,
+            emissive: 0x0a1a06,  // Slight glow
+            emissiveIntensity: 0.2
         });
+        
         const clothingMaterial = new THREE.MeshStandardMaterial({ 
-            color: 0x444466,  // Dark blue-grey for tattered clothes
-            roughness: 0.9
+            color: 0x1a1a1a,  // Almost black
+            roughness: 1,
+            metalness: 0
         });
         
         // Body - torso
@@ -541,15 +706,46 @@ class Game {
         // Make health bar always face camera
         healthBarGroup.rotation.x = -Math.PI / 6;
 
+        // Add zombie sounds with better handling
+        let zombieSound = null;
+        if (this.audioListener && this.zombieSoundBuffers.length > 0) {
+            zombieSound = new THREE.PositionalAudio(this.audioListener);
+            const randomBuffer = this.zombieSoundBuffers[Math.floor(Math.random() * this.zombieSoundBuffers.length)];
+            zombieSound.setBuffer(randomBuffer);
+            zombieSound.setRefDistance(20);
+            zombieSound.setVolume(0.5);
+            zombieSound.setLoop(false);
+            zombieGroup.add(zombieSound);
+            
+            // Schedule random groaning with better checks
+            const groanInterval = setInterval(() => {
+                if (zombieSound && zombieSound.buffer && !zombieSound.isPlaying && Math.random() < 0.1) {
+                    zombieSound.play();
+                }
+            }, 5000);
+
+            // Store interval for cleanup
+            zombieGroup.groanInterval = groanInterval;
+        }
+
         return {
             mesh: zombieGroup,
             health: 100,
-            maxHealth: 100, // Add maxHealth for percentage calculation
+            maxHealth: 100,
             speed: 3 + Math.random() * 2,
             damage: 10,
             lastAttack: 0,
             attackCooldown: 1000,
-            animation: walkingAnimation
+            animation: walkingAnimation,
+            sound: zombieSound,
+            cleanup: () => {
+                if (zombieGroup.groanInterval) {
+                    clearInterval(zombieGroup.groanInterval);
+                }
+                if (zombieSound) {
+                    zombieSound.stop();
+                }
+            }
         };
     }
 
@@ -564,7 +760,11 @@ class Game {
         // Spawn zombies during wave
         if (this.isWaveInProgress && this.zombiesRemainingToSpawn > 0 && 
             now - this.lastZombieSpawn > this.zombieSpawnInterval) {
-            this.zombies.push(this.createZombie());
+            if (this.isBossWave) {
+                this.zombies.push(this.createBossZombie());
+            } else {
+                this.zombies.push(this.createEnhancedZombie());
+            }
             this.zombiesRemainingToSpawn--;
             this.activeZombies++;
             this.lastZombieSpawn = now;
@@ -574,52 +774,26 @@ class Game {
         for (let i = this.zombies.length - 1; i >= 0; i--) {
             const zombie = this.zombies[i];
             
-            // Update walking animation
-            zombie.animation.time += delta * zombie.animation.speed;
-            
-            // Apply walking animation to legs and arms
-            const legGroups = zombie.mesh.children.slice(-2); // Last two children are legs
-            const armGroups = zombie.mesh.children.slice(-4, -2); // Second-to-last two children are arms
-            
-            legGroups.forEach((leg, index) => {
-                const offset = index * Math.PI; // Opposite legs move in opposite directions
-                leg.rotation.x = Math.sin(zombie.animation.time + offset) * 0.3;
-            });
-            
-            armGroups.forEach((arm, index) => {
-                const offset = index * Math.PI + Math.PI; // Arms move opposite to legs
-                arm.rotation.x = Math.sin(zombie.animation.time + offset) * 0.3;
-            });
-            
-            // Basic pathfinding: avoid other zombies while moving towards player
-            const avoidanceForce = new THREE.Vector3();
-            this.zombies.forEach(otherZombie => {
-                if (otherZombie !== zombie) {
-                    const diff = new THREE.Vector3().subVectors(
-                        zombie.mesh.position, 
-                        otherZombie.mesh.position
-                    );
-                    const dist = diff.length();
-                    if (dist < 3) { // Avoidance radius
-                        avoidanceForce.add(diff.normalize().multiplyScalar(1 / dist));
-                    }
-                }
-            });
-            
-            // Combine avoidance with player direction
-            const toPlayer = new THREE.Vector3().subVectors(
-                this.camera.position, 
-                zombie.mesh.position
-            );
-            toPlayer.y = 0;
-            toPlayer.normalize();
-            
-            const finalDirection = toPlayer.add(avoidanceForce.multiplyScalar(0.5));
-            finalDirection.normalize();
+            // Update zombie position
+            const direction = new THREE.Vector3();
+            direction.subVectors(this.camera.position, zombie.mesh.position);
+            direction.y = 0; // Keep zombies on ground
+            direction.normalize();
             
             // Move zombie
-            zombie.mesh.position.add(finalDirection.multiplyScalar(delta * zombie.speed));
+            zombie.mesh.position.add(direction.multiplyScalar(zombie.speed * delta));
             zombie.mesh.lookAt(this.camera.position);
+
+            // Update walking animation
+            if (zombie.animation) {
+                zombie.animation.time += delta;
+                const legRotation = Math.sin(zombie.animation.time * zombie.animation.speed * Math.PI) * zombie.animation.maxRotation;
+                
+                if (zombie.mesh.leftLeg && zombie.mesh.rightLeg) {
+                    zombie.mesh.leftLeg.rotation.x = legRotation;
+                    zombie.mesh.rightLeg.rotation.x = -legRotation;
+                }
+            }
             
             // Update health bar scale based on health percentage
             const healthPercent = zombie.health / zombie.maxHealth;
@@ -643,11 +817,31 @@ class Game {
                     this.scene.remove(bullet.mesh);
                     this.bullets.splice(j, 1);
                     
-                    // Damage zombie and update health bar
+                    // Create blood effects
+                    this.createBloodParticles(bullet.mesh.position);
+                    this.createBloodDecal(new THREE.Vector3(
+                        zombie.mesh.position.x,
+                        0,
+                        zombie.mesh.position.z
+                    ));
+                    
+                    // Play hit sound if available using sound pool
+                    if (this.hitSounds && this.hitSounds.length > 0) {
+                        const hitSound = this.hitSounds[this.currentHitSound];
+                        if (hitSound && hitSound.buffer && !hitSound.isPlaying) {
+                            hitSound.play();
+                        }
+                        this.currentHitSound = (this.currentHitSound + 1) % this.hitSounds.length;
+                    }
+                    
+                    // Damage zombie
                     zombie.health -= 34;
                     
                     // Remove zombie if dead
                     if (zombie.health <= 0) {
+                        if (zombie.cleanup) {
+                            zombie.cleanup(); // Clean up sounds
+                        }
                         this.scene.remove(zombie.mesh);
                         this.zombies.splice(i, 1);
                         this.activeZombies--;
@@ -799,32 +993,61 @@ class Game {
 
     startNewWave() {
         this.currentWave++;
-        this.zombiesPerWave = Math.floor(5 + (this.currentWave - 1) * 2);
-        this.zombiesRemainingToSpawn = this.zombiesPerWave;
-        this.isWaveInProgress = true;
         
-        // Add wave bonus points
-        if (this.currentWave > 1) {
-            this.addScore(this.waveBonus * (this.currentWave - 1));
+        // Check if it's a boss wave (every 5th wave)
+        if (this.currentWave % 5 === 0) {
+            this.zombiesPerWave = 1; // Only spawn boss
+            this.zombiesRemainingToSpawn = 1;
+            this.isWaveInProgress = true;
+            this.isBossWave = true;
+            
+            // Show boss wave announcement
+            const waveAnnouncement = document.createElement('div');
+            waveAnnouncement.style.position = 'absolute';
+            waveAnnouncement.style.top = '50%';
+            waveAnnouncement.style.left = '50%';
+            waveAnnouncement.style.transform = 'translate(-50%, -50%)';
+            waveAnnouncement.style.color = 'red';
+            waveAnnouncement.style.fontSize = '64px';
+            waveAnnouncement.style.fontWeight = 'bold';
+            waveAnnouncement.style.textAlign = 'center';
+            waveAnnouncement.style.textShadow = '0 0 10px #ff0000';
+            waveAnnouncement.innerHTML = `BOSS WAVE ${this.currentWave}`;
+            document.body.appendChild(waveAnnouncement);
+            
+            setTimeout(() => {
+                document.body.removeChild(waveAnnouncement);
+            }, 3000);
+        } else {
+            // Normal wave logic
+            this.isBossWave = false;
+            this.zombiesPerWave = Math.floor(5 + (this.currentWave - 1) * 2);
+            this.zombiesRemainingToSpawn = this.zombiesPerWave;
+            this.isWaveInProgress = true;
+            
+            // Add wave bonus points
+            if (this.currentWave > 1) {
+                this.addScore(this.waveBonus * (this.currentWave - 1));
+            }
+            
+            // Show wave announcement with bonus
+            const waveAnnouncement = document.createElement('div');
+            waveAnnouncement.style.position = 'absolute';
+            waveAnnouncement.style.top = '50%';
+            waveAnnouncement.style.left = '50%';
+            waveAnnouncement.style.transform = 'translate(-50%, -50%)';
+            waveAnnouncement.style.color = 'white';
+            waveAnnouncement.style.fontSize = '48px';
+            waveAnnouncement.style.fontWeight = 'bold';
+            waveAnnouncement.style.textAlign = 'center';
+            waveAnnouncement.innerHTML = `Wave ${this.currentWave}
+                ${this.currentWave > 1 ? `<div style="font-size: 24px;">Wave Bonus: +${this.waveBonus * (this.currentWave - 1)}</div>` : ''}`;
+            document.body.appendChild(waveAnnouncement);
+            
+            setTimeout(() => {
+                document.body.removeChild(waveAnnouncement);
+            }, 2000);
         }
-        
-        // Show wave announcement with bonus
-        const waveAnnouncement = document.createElement('div');
-        waveAnnouncement.style.position = 'absolute';
-        waveAnnouncement.style.top = '50%';
-        waveAnnouncement.style.left = '50%';
-        waveAnnouncement.style.transform = 'translate(-50%, -50%)';
-        waveAnnouncement.style.color = 'white';
-        waveAnnouncement.style.fontSize = '48px';
-        waveAnnouncement.style.fontWeight = 'bold';
-        waveAnnouncement.style.textAlign = 'center';
-        waveAnnouncement.innerHTML = `Wave ${this.currentWave}
-            ${this.currentWave > 1 ? `<div style="font-size: 24px;">Wave Bonus: +${this.waveBonus * (this.currentWave - 1)}</div>` : ''}`;
-        document.body.appendChild(waveAnnouncement);
-        
-        setTimeout(() => {
-            document.body.removeChild(waveAnnouncement);
-        }, 2000);
     }
 
     createNeonBuilding() {
@@ -850,10 +1073,12 @@ class Game {
         const windowRows = Math.floor(height / 2);
         const windowCols = Math.floor(width / 2);
         const windowGeometry = new THREE.PlaneGeometry(0.8, 0.8);
-        const windowMaterial = new THREE.MeshBasicMaterial({
+        const windowMaterial = new THREE.MeshStandardMaterial({
             color: new THREE.Color(Math.random(), Math.random(), 1),
             emissive: new THREE.Color(Math.random(), Math.random(), 1),
-            emissiveIntensity: 1
+            emissiveIntensity: 1,
+            metalness: 0.5,
+            roughness: 0.2
         });
         
         // Front and back windows
@@ -879,10 +1104,12 @@ class Game {
         
         // Add neon trim
         const neonColor = new THREE.Color(Math.random(), Math.random(), 1);
-        const neonMaterial = new THREE.MeshBasicMaterial({
+        const neonMaterial = new THREE.MeshStandardMaterial({
             color: neonColor,
             emissive: neonColor,
-            emissiveIntensity: 2
+            emissiveIntensity: 2,
+            metalness: 0.5,
+            roughness: 0.2
         });
         
         // Vertical neon strips
@@ -904,6 +1131,43 @@ class Game {
         return buildingGroup;
     }
 
+    updateBloodEffects(delta) {
+        // Update blood particles
+        for (let i = this.bloodParticles.length - 1; i >= 0; i--) {
+            const particleSystem = this.bloodParticles[i];
+            let allDead = true;
+            
+            particleSystem.particles.forEach(particle => {
+                particle.age += delta;
+                
+                if (particle.age < particle.lifetime) {
+                    allDead = false;
+                    particle.velocity.y -= 9.8 * delta; // Gravity
+                    particle.position.add(particle.velocity.clone().multiplyScalar(delta));
+                    particle.material.opacity = 1 - (particle.age / particle.lifetime);
+                }
+            });
+            
+            if (allDead) {
+                this.scene.remove(particleSystem.group);
+                this.bloodParticles.splice(i, 1);
+            }
+        }
+        
+        // Update blood decals
+        for (let i = this.bloodDecals.length - 1; i >= 0; i--) {
+            const decal = this.bloodDecals[i];
+            decal.age += delta;
+            
+            if (decal.age > decal.lifetime) {
+                this.scene.remove(decal.mesh);
+                this.bloodDecals.splice(i, 1);
+            } else if (decal.age > decal.lifetime * 0.7) {
+                decal.mesh.material.opacity = 1 - ((decal.age - decal.lifetime * 0.7) / (decal.lifetime * 0.3));
+            }
+        }
+    }
+
     animate() {
         requestAnimationFrame(() => this.animate());
         
@@ -918,13 +1182,288 @@ class Game {
             
             this.updateBullets(delta);
             this.updateZombies(delta);
+            this.updateBloodEffects(delta);
             this.updateHealthDisplay();
         }
         
         this.renderer.render(this.scene, this.camera);
         this.prevTime = performance.now();
     }
+
+    createWeaponModels() {
+        // Pistol model
+        this.weapons.pistol.model = this.createPistolModel();
+        
+        // Shotgun model
+        this.weapons.shotgun.model = this.createShotgunModel();
+        
+        // Machine Gun model
+        this.weapons.machineGun.model = this.createMachineGunModel();
+        
+        // Hide all weapons initially
+        Object.values(this.weapons).forEach(weapon => {
+            if (weapon.model) {
+                weapon.model.visible = false;
+                this.camera.add(weapon.model);
+            }
+        });
+        
+        // Show initial weapon
+        this.weapons[this.currentWeapon].model.visible = true;
+    }
+
+    createPistolModel() {
+        const gunGroup = new THREE.Group();
+        
+        // Gun barrel
+        const barrelGeometry = new THREE.BoxGeometry(0.1, 0.1, 0.5);
+        const barrelMaterial = new THREE.MeshStandardMaterial({ color: 0x444444 });
+        const barrel = new THREE.Mesh(barrelGeometry, barrelMaterial);
+        barrel.position.z = -0.25;
+        
+        // Gun handle
+        const handleGeometry = new THREE.BoxGeometry(0.1, 0.3, 0.1);
+        const handle = new THREE.Mesh(handleGeometry, barrelMaterial);
+        handle.position.y = -0.2;
+        
+        gunGroup.add(barrel);
+        gunGroup.add(handle);
+        gunGroup.position.set(0.3, -0.3, -0.5);
+        
+        return gunGroup;
+    }
+
+    createShotgunModel() {
+        const gunGroup = new THREE.Group();
+        
+        // Wider barrel
+        const barrelGeometry = new THREE.BoxGeometry(0.15, 0.15, 0.8);
+        const barrelMaterial = new THREE.MeshStandardMaterial({ color: 0x444444 });
+        const barrel = new THREE.Mesh(barrelGeometry, barrelMaterial);
+        barrel.position.z = -0.4;
+        
+        // Pump action
+        const pumpGeometry = new THREE.BoxGeometry(0.2, 0.2, 0.3);
+        const pump = new THREE.Mesh(pumpGeometry, barrelMaterial);
+        pump.position.z = -0.2;
+        
+        // Stock
+        const stockGeometry = new THREE.BoxGeometry(0.1, 0.2, 0.4);
+        const stock = new THREE.Mesh(stockGeometry, barrelMaterial);
+        stock.position.z = 0.2;
+        stock.position.y = -0.1;
+        
+        gunGroup.add(barrel);
+        gunGroup.add(pump);
+        gunGroup.add(stock);
+        gunGroup.position.set(0.3, -0.3, -0.5);
+        
+        return gunGroup;
+    }
+
+    createMachineGunModel() {
+        const gunGroup = new THREE.Group();
+        
+        // Long barrel
+        const barrelGeometry = new THREE.BoxGeometry(0.1, 0.1, 1);
+        const barrelMaterial = new THREE.MeshStandardMaterial({ color: 0x444444 });
+        const barrel = new THREE.Mesh(barrelGeometry, barrelMaterial);
+        barrel.position.z = -0.5;
+        
+        // Magazine
+        const magGeometry = new THREE.BoxGeometry(0.1, 0.4, 0.15);
+        const magazine = new THREE.Mesh(magGeometry, barrelMaterial);
+        magazine.position.y = -0.3;
+        
+        gunGroup.add(barrel);
+        gunGroup.add(magazine);
+        gunGroup.position.set(0.3, -0.3, -0.5);
+        
+        return gunGroup;
+    }
+
+    createWeaponDisplay() {
+        const weaponDisplay = document.createElement('div');
+        weaponDisplay.style.position = 'absolute';
+        weaponDisplay.style.bottom = '20px';
+        weaponDisplay.style.right = '20px';
+        weaponDisplay.style.color = 'white';
+        weaponDisplay.style.fontSize = '24px';
+        document.body.appendChild(weaponDisplay);
+        this.weaponDisplay = weaponDisplay;
+        this.updateWeaponDisplay();
+    }
+
+    updateWeaponDisplay() {
+        const weapon = this.weapons[this.currentWeapon];
+        this.weaponDisplay.textContent = 
+            `${weapon.name} ${weapon.ammo < Infinity ? `[Ammo: ${weapon.ammo}]` : ''}`;
+    }
+
+    switchWeapon(weaponName) {
+        if (this.weapons[weaponName] && weaponName !== this.currentWeapon) {
+            // Hide current weapon
+            this.weapons[this.currentWeapon].model.visible = false;
+            
+            // Show new weapon
+            this.currentWeapon = weaponName;
+            this.weapons[this.currentWeapon].model.visible = true;
+            
+            this.updateWeaponDisplay();
+        }
+    }
+
+    createCrosshair() {
+        const crosshair = document.createElement('div');
+        crosshair.style.position = 'absolute';
+        crosshair.style.top = '50%';
+        crosshair.style.left = '50%';
+        crosshair.style.width = '20px';
+        crosshair.style.height = '20px';
+        crosshair.style.backgroundColor = 'transparent';
+        crosshair.style.border = '2px solid white';
+        crosshair.style.borderRadius = '50%';
+        crosshair.style.transform = 'translate(-50%, -50%)';
+        crosshair.style.pointerEvents = 'none';
+        document.body.appendChild(crosshair);
+        this.crosshair = crosshair;
+    }
+
+    createBossZombie() {
+        const zombieGroup = new THREE.Group();
+        
+        // Main body - larger and more detailed
+        const bodyGeometry = new THREE.BoxGeometry(3, 4, 2);
+        const bodyMaterial = new THREE.MeshStandardMaterial({
+            color: 0x330000,
+            roughness: 0.7,
+            metalness: 0.3,
+            emissive: 0x110000,
+            emissiveIntensity: 0.5
+        });
+        const body = new THREE.Mesh(bodyGeometry, bodyMaterial);
+        body.position.y = 4; // Raised higher to be more visible
+        zombieGroup.add(body);
+        
+        // Glowing eyes - made bigger
+        const eyeGeometry = new THREE.SphereGeometry(0.3, 16, 16);
+        const eyeMaterial = new THREE.MeshStandardMaterial({
+            color: 0xff0000,
+            emissive: 0xff0000,
+            emissiveIntensity: 3
+        });
+        
+        const leftEye = new THREE.Mesh(eyeGeometry, eyeMaterial);
+        leftEye.position.set(-0.5, 5.5, 0.8); // Adjusted position
+        zombieGroup.add(leftEye);
+        
+        const rightEye = new THREE.Mesh(eyeGeometry, eyeMaterial);
+        rightEye.position.set(0.5, 5.5, 0.8); // Adjusted position
+        zombieGroup.add(rightEye);
+        
+        // Spikes on back - made bigger
+        const spikeGeometry = new THREE.ConeGeometry(0.3, 1.5, 8);
+        const spikeMaterial = new THREE.MeshStandardMaterial({
+            color: 0x660000,
+            roughness: 0.3,
+            metalness: 0.7,
+            emissive: 0x330000,
+            emissiveIntensity: 0.3
+        });
+        
+        for (let i = 0; i < 6; i++) {
+            const spike = new THREE.Mesh(spikeGeometry, spikeMaterial);
+            spike.position.set(0, 5.5, -0.8); // Adjusted position
+            spike.rotation.x = Math.PI / 3;
+            spike.position.x = (i - 2.5) * 0.6; // Spread spikes wider
+            zombieGroup.add(spike);
+        }
+        
+        // Claws - made bigger and more menacing
+        const clawGeometry = new THREE.ConeGeometry(0.2, 1, 4);
+        const clawMaterial = new THREE.MeshStandardMaterial({
+            color: 0x111111,
+            roughness: 0.2,
+            metalness: 0.9,
+            emissive: 0x110000,
+            emissiveIntensity: 0.2
+        });
+        
+        // Add claws to both hands
+        for (let side of [-1, 1]) {
+            for (let i = 0; i < 3; i++) {
+                const claw = new THREE.Mesh(clawGeometry, clawMaterial);
+                claw.position.set(side * 2, 3, 0.8 + i * 0.4);
+                claw.rotation.x = -Math.PI / 3;
+                zombieGroup.add(claw);
+            }
+        }
+        
+        // Add health bar - made bigger
+        const healthBarGroup = new THREE.Group();
+        healthBarGroup.position.y = 7; // Raised higher
+        
+        const barGeometry = new THREE.PlaneGeometry(4, 0.4);
+        const backgroundBar = new THREE.Mesh(
+            barGeometry,
+            new THREE.MeshBasicMaterial({ color: 0x444444 })
+        );
+        healthBarGroup.add(backgroundBar);
+        
+        const healthBar = new THREE.Mesh(
+            barGeometry,
+            new THREE.MeshBasicMaterial({ color: 0xff0000 })
+        );
+        healthBar.position.z = 0.01;
+        healthBarGroup.add(healthBar);
+        
+        zombieGroup.add(healthBarGroup);
+        zombieGroup.healthBar = healthBar;
+        healthBarGroup.rotation.x = -Math.PI / 6;
+
+        // Add legs for animation - made bigger
+        const legGeometry = new THREE.BoxGeometry(0.8, 4, 0.8);
+        const legMaterial = new THREE.MeshStandardMaterial({
+            color: 0x330000,
+            roughness: 0.7,
+            metalness: 0.3,
+            emissive: 0x110000,
+            emissiveIntensity: 0.3
+        });
+
+        const leftLeg = new THREE.Mesh(legGeometry, legMaterial);
+        leftLeg.position.set(-1, 2, 0);
+        zombieGroup.add(leftLeg);
+
+        const rightLeg = new THREE.Mesh(legGeometry, legMaterial);
+        rightLeg.position.set(1, 2, 0);
+        zombieGroup.add(rightLeg);
+
+        // Store legs in the group for animation
+        zombieGroup.leftLeg = leftLeg;
+        zombieGroup.rightLeg = rightLeg;
+
+        // Scale the entire group
+        zombieGroup.scale.set(2, 2, 2);
+
+        return {
+            mesh: zombieGroup,
+            health: 1000,
+            maxHealth: 1000,
+            speed: 2,
+            damage: 25,
+            lastAttack: 0,
+            attackCooldown: 2000,
+            isBoss: true,
+            animation: {
+                time: 0,
+                speed: 1.5,
+                legRotation: 0,
+                maxRotation: Math.PI / 6
+            }
+        };
+    }
 }
 
 // Start the game
-new Game(); 
+new Game();
